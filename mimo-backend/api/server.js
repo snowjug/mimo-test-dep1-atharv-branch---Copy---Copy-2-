@@ -153,6 +153,14 @@ const upload = multer({ storage: multer.memoryStorage() });
 const SECRET_KEY = process.env.JWT_SECRET;
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+app.get("/", (_req, res) => {
+  res.status(200).send("mimo backend running");
+});
+
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 // ================= CASHFREE =================
 const CASHFREE_BASE_URL = "https://sandbox.cashfree.com/pg";
 const cashfreeHeaders = {
@@ -986,7 +994,7 @@ app.get("/download/:id", async (req, res) => {
 });
 // ================= START =================
 if (require.main === module) {
-  app.listen(process.env.PORT || 3000, () => {
+  app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
     console.log("🚀 Server running");
   });
 }
