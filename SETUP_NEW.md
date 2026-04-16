@@ -175,6 +175,76 @@ For remote, silent printing, the system relies on a local Raspberry Pi.
 
 ---
 
+## [Northflank Backend Deployment]
+
+Use Northflank for the backend only. The repo includes a root-level `Dockerfile` so Northflank can build from the repository root without needing a subfolder working directory.
+
+### [Dockerfile]
+
+- Build type: `Dockerfile`
+- Build context: `/root`
+- Dockerfile location: `/root/Dockerfile`
+- Port: `3000`
+
+### [Northflank Environment Variables]
+
+Set these runtime variables in Northflank:
+
+```env
+PORT=3000
+JWT_SECRET=<strong-random-secret>
+CLIENT_URL=<your-vercel-web-url>
+CASHFREE_APP_ID=<cashfree-app-id>
+CASHFREE_SECRET_KEY=<cashfree-secret-key>
+GOOGLE_CLIENT_ID=<google-oauth-client-id>
+FIREBASE_STORAGE_BUCKET=gs://<project-id>.firebasestorage.app
+FASTAPI_PRINT_URL=http://<raspberry-pi-ip>:8000/print
+TEST_PRINT_MODE=false
+```
+
+### [Firebase Service Account]
+
+Choose one of these options:
+
+- Secret env: `FIREBASE_SERVICE_ACCOUNT_JSON`
+- Base64 secret env: `FIREBASE_SERVICE_ACCOUNT_JSON_BASE64`
+- Mounted file: `mimo-backend/api/serviceAccountKey.json`
+
+If you use the base64 option, generate it from your Firebase admin JSON file and paste the encoded string into Northflank.
+
+### [Redeploy]
+
+After setting the Dockerfile path and secrets, rebuild the service and confirm `/health` returns `{"status":"ok"}`.
+
+## [Vercel Frontend Deployment]
+
+Deploy the web frontend from the `mimo-frontend` folder.
+
+### [Root Folder]
+
+- Use `mimo-frontend` as the Vercel project root if you want the wrapper config.
+- The wrapper inside `mimo-frontend` forwards the build into `mimo-frontend/MIMO`.
+
+### [Build Settings]
+
+- Build command: `npm run build`
+- Output directory: `MIMO/dist`
+- SPA rewrite: `/(.*)` to `/index.html`
+
+### [Frontend Files]
+
+- Wrapper package: [mimo-frontend/package.json](mimo-frontend/package.json)
+- Wrapper Vercel config: [mimo-frontend/vercel.json](mimo-frontend/vercel.json)
+- Actual app entry: [mimo-frontend/MIMO/index.html](mimo-frontend/MIMO/index.html)
+
+### [Vercel Env Vars]
+
+- `VITE_BACKEND_API_URL=<your-northflank-backend-url>`
+
+If you still see `404: NOT_FOUND`, double-check that the Vercel project root is `mimo-frontend` and not the repo root.
+
+---
+
 ## 🎯 The Complete End-to-End Workflow Validation
 
 1. **Upload & Pay:** A user uploads a PDF from their phone via `frontend/`. It hits the `backend/` API, talks to Cashfree, and the user pays.
@@ -320,3 +390,5 @@ When finalizing the code architecture, you (the AI) MUST instruct the user to ex
    - The two Frontend apps will deploy automatically as standard web projects.
    - For the Node.js `backend/`, ensure you generate a `vercel.json` at its root with `"rewrites": [ { "source": "/(.*)", "destination": "/api/index.js" } ]` so Vercel natively converts the Express endpoints into Serverless Functions.
 3. **Firebase Deployment:** Instruct the user to install `firebase-tools` (Firebase CLI) globally and run `firebase deploy --only firestore:rules` and `gsutil cors set cors.json gs://YOUR_BUCKET` to push the security rules you generated above.
+
+

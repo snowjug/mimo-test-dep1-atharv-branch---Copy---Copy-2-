@@ -1,0 +1,9 @@
+{
+  "name": "mimo-frontend-wrapper",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "npm --prefix MIMO install && npm --prefix MIMO run build",
+    "dev": "npm --prefix MIMO run dev"
+  }
+}
