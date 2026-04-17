@@ -57,17 +57,29 @@ const downloadJobPdf = async (jobData) => {
 
 const pdfCache = new Map();
 const PDF_CACHE_TTL = 15 * 60 * 1000;
+const MAX_CACHE_SIZE = 200 * 1024 * 1024;  // 200MB max
+let cacheSizeBytes = 0;
 
 setInterval(() => {
   const now = Date.now();
   for (const [key, value] of pdfCache.entries()) {
     if (value.expiry < now) {
+      cacheSizeBytes -= value.buffer.length;
       pdfCache.delete(key);
     }
   }
 }, 5 * 60 * 1000);
 
 const cacheJobPdf = (pin, buffer) => {
+  // Evict oldest if over limit
+  if (cacheSizeBytes + buffer.length > MAX_CACHE_SIZE) {
+    const oldestPin = Array.from(pdfCache.keys())[0];
+    const oldestItem = pdfCache.get(oldestPin);
+    cacheSizeBytes -= oldestItem.buffer.length;
+    pdfCache.delete(oldestPin);
+  }
+  
+  cacheSizeBytes += buffer.length;
   pdfCache.set(pin, {
     buffer,
     expiry: Date.now() + PDF_CACHE_TTL,
@@ -78,6 +90,7 @@ const getCachedJobPdf = (pin) => {
   const cached = pdfCache.get(pin);
   if (!cached) return null;
   if (cached.expiry < Date.now()) {
+    cacheSizeBytes -= cached.buffer.length;
     pdfCache.delete(pin);
     return null;
   }
@@ -650,11 +663,18 @@ const processPendingConversionsForUser = async (userId) => {
     .collection("printJobs")
     .where("userId", "==", userId)
     .where("status", "==", "pending_conversion")
+    .where("isConverting", "!=", true)  // FIX: Skip if already converting (prevents race condition)
     .get();
 
   for (let doc of jobs.docs) {
     const jobData = doc.data();
     try {
+      // FIX: Set converting flag to prevent concurrent processing
+      await doc.ref.update({
+        isConverting: true,
+        conversionStartedAt: new Date(),
+      });
+
       const sourceFilePath = jobData.fileUrl.split(`${bucket.name}/`)[1];
       const sourceFile = bucket.file(sourceFilePath);
       const [fileBuffer] = await withTimeout(sourceFile.download(), 30000, "File download");
@@ -675,11 +695,13 @@ const processPendingConversionsForUser = async (userId) => {
         pageCount,
         fileUrl: `gs://${bucket.name}/${convertedFileName}`,
         status: "pending",
+        isConverting: false,
         conversionCompletedAt: new Date(),
       });
     } catch (conversionErr) {
       await doc.ref.update({
         status: "conversion_failed",
+        isConverting: false,
         conversionError: conversionErr.message,
         failedAt: new Date(),
       });
@@ -709,19 +731,24 @@ app.post("/create-order", authenticateToken, async (req, res) => {
     const amount = Number((totalPages * 2.3).toFixed(2));
     const orderId = "order_" + Date.now();
 
-    const response = await axios.post(
-      `${CASHFREE_BASE_URL}/orders`,
-      {
-        order_id: orderId,
-        order_amount: amount,
-        order_currency: "INR",
-        customer_details: {
-          customer_id: userId,
-          customer_email: "user@email.com",
-          customer_phone: "9999999999",
+    // FIX: Add timeout to prevent hangs and duplicate orders
+    const response = await withTimeout(
+      axios.post(
+        `${CASHFREE_BASE_URL}/orders`,
+        {
+          order_id: orderId,
+          order_amount: amount,
+          order_currency: "INR",
+          customer_details: {
+            customer_id: userId,
+            customer_email: "user@email.com",
+            customer_phone: "9999999999",
+          },
         },
-      },
-      { headers: cashfreeHeaders }
+        { headers: cashfreeHeaders }
+      ),
+      10000,  // 10 second timeout
+      "Cashfree order creation"
     );
 
     await db.collection("orders").add({
@@ -998,7 +1025,8 @@ app.get("/print-summary", authenticateToken, async (req, res) => {
   }
 });
 
-app.post("/mark-printed", async (req, res) => {
+app.post("/mark-printed", authenticateToken, async (req, res) => {
+  // FIX: Now requires authentication
   try {
     const { printCode, pin } = req.body;
     const lookupPin = pin || printCode;
@@ -1036,7 +1064,35 @@ app.post("/mark-printed", async (req, res) => {
   }
 });
 
-app.post("/kiosk/print", async (req, res) => {
+// FIX: Rate limiter for /kiosk/print endpoint (prevent DOS, rate: 20/min per IP)
+const kioskPrintLimiter = (() => {
+  const store = new Map();
+  return (req, res, next) => {
+    const ip = req.ip || req.connection.remoteAddress;
+    const now = Date.now();
+    const windowMs = 60 * 1000;  // 1 minute
+    const maxRequests = 20;      // 20 requests per minute
+    
+    if (!store.has(ip)) {
+      store.set(ip, []);
+    }
+    
+    const requests = store.get(ip).filter(time => now - time < windowMs);
+    
+    if (requests.length >= maxRequests) {
+      return res.status(429).json({ 
+        error: "Too many print requests. Please wait before trying again.",
+        retryAfter: Math.ceil((requests[0] + windowMs - now) / 1000)
+      });
+    }
+    
+    requests.push(now);
+    store.set(ip, requests);
+    next();
+  };
+})();
+
+app.post("/kiosk/print", kioskPrintLimiter, async (req, res) => {
   try {
     const { pin } = req.body;
 
