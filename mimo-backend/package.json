@@ -24,6 +24,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node api/server.js",
+    "backfill:printjobs-schema:dry": "node scripts/backfill-printjobs-schema.js",
+    "backfill:printjobs-schema:apply": "node scripts/backfill-printjobs-schema.js --apply",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
