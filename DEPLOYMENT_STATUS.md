@@ -156,11 +156,11 @@ All code is production-ready. The only manual step remaining is creating Firesto
 ## Questions?
 
 Refer to:
-- **How to deploy?** → [PRODUCTION_DEPLOYMENT_GUIDE.md](PRODUCTION_DEPLOYMENT_GUIDE.md)
-- **What was fixed?** → [CRITICAL_ISSUES_ANALYSIS.md](CRITICAL_ISSUES_ANALYSIS.md)
-- **Test results?** → [TEST_REPORT.md](TEST_REPORT.md)
-- **Load test details?** → [MAX_LOAD_TEST.md](MAX_LOAD_TEST.md)
-- **Manual testing?** → [SMOKE_TEST_CHECKLIST.md](SMOKE_TEST_CHECKLIST.md)
+- **How to deploy?** → [docs/DEPLOYMENT/PRODUCTION_DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT/PRODUCTION_DEPLOYMENT_GUIDE.md)
+- **What was fixed?** → [docs/DEPLOYMENT/CRITICAL_ISSUES_ANALYSIS.md](docs/DEPLOYMENT/CRITICAL_ISSUES_ANALYSIS.md)
+- **Test results?** → [docs/TEST REPORTS/TEST_REPORT.md](docs/TEST%20REPORTS/TEST_REPORT.md)
+- **Load test details?** → [docs/TEST REPORTS/MAX_LOAD_TEST.md](docs/TEST%20REPORTS/MAX_LOAD_TEST.md)
+- **Manual testing?** → [docs/TEST REPORTS/SMOKE_TEST_CHECKLIST.md](docs/TEST%20REPORTS/SMOKE_TEST_CHECKLIST.md)
 
 ---
 

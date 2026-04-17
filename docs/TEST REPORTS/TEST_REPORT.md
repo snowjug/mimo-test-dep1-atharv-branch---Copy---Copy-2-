@@ -261,8 +261,8 @@ Apply the 5 critical fixes first, re-test, then deploy.
 ## Questions?
 
 Refer to:
-- [CRITICAL_ISSUES_ANALYSIS.md](CRITICAL_ISSUES_ANALYSIS.md) - Detailed issue breakdown
+- [../DEPLOYMENT/CRITICAL_ISSUES_ANALYSIS.md](../DEPLOYMENT/CRITICAL_ISSUES_ANALYSIS.md) - Detailed issue breakdown
 - [MAX_LOAD_TEST.md](MAX_LOAD_TEST.md) - Full load test scenarios
 - [SMOKE_TEST_CHECKLIST.md](SMOKE_TEST_CHECKLIST.md) - Manual smoke test guide
-- [NORTHFLANK_FREE_TIER_OPTIMIZATION.md](NORTHFLANK_FREE_TIER_OPTIMIZATION.md) - Optimization details
+- [../DEPLOYMENT/NORTHFLANK_FREE_TIER_OPTIMIZATION.md](../DEPLOYMENT/NORTHFLANK_FREE_TIER_OPTIMIZATION.md) - Optimization details
 

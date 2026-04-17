@@ -148,8 +148,9 @@ npm --prefix mimo-kiosk/mimo-frontend run dev
 - For backend secrets on Northflank, use service account env (`FIREBASE_SERVICE_ACCOUNT_JSON` or base64 variant).
 
 See:
-- `docs/SETUP_NEW.md`
-- `docs/DEPLOYMENT.md`
+- `docs/SETUP/SETUP_NEW.md`
+- `docs/SETUP/MIMO_KIOSK_UI_TO_APK_CAPACITOR.md`
+- `docs/DEPLOYMENT/DEPLOYMENT.md`
 
 ## Firebase and Security Notes
 

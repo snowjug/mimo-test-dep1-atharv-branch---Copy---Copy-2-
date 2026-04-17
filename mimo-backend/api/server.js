@@ -35,6 +35,114 @@ const SUPPORTED_EXTENSIONS = new Set([
   ".png",
 ]);
 
+const COLLECTIONS = {
+  USERS: "users",
+  PRINT_JOBS: "printJobs",
+  ORDERS: "orders",
+  PAYMENT_TRANSACTIONS: "payment_transactions",
+  KIOSK_MACHINES: "kiosk_machines",
+};
+
+const nowMs = () => Date.now();
+
+const defaultPrintOptions = {
+  copies: 1,
+  colorMode: "bw",
+  layout: "single",
+  pageSelection: "all",
+  startPage: null,
+  endPage: null,
+  duplexMode: "simplex",
+};
+
+const buildPrintJobUploadDoc = ({ userId, jobId, file, fileUrl, sessionId, ipAddress, userAgent }) => {
+  const createdAtMs = nowMs();
+
+  return {
+    // Legacy fields kept for current app compatibility.
+    userId,
+    sourceFileName: file.originalname,
+    fileUrl,
+    status: "pending_conversion",
+    createdAt: new Date(createdAtMs),
+
+    // New schema fields.
+    jobId,
+    orderId: null,
+    kioskId: null,
+    pin: null,
+    sourceFile: {
+      fileName: file.originalname,
+      originalExtension: path.extname(file.originalname || "").toLowerCase(),
+      mimeType: file.mimetype || "application/octet-stream",
+      fileSizeBytes: Number(file.size || 0),
+      uploadedAt: createdAtMs,
+      uploadDurationMs: null,
+    },
+    conversionDetails: {
+      convertedAt: null,
+      originalPageCount: null,
+      actualPageCount: null,
+      isConverting: false,
+      conversionDurationMs: null,
+      conversionSuccess: null,
+      conversionError: null,
+      storagePath: fileUrl,
+      storageSizeBytes: Number(file.size || 0),
+    },
+    printOptions: { ...defaultPrintOptions },
+    pricing: {
+      pricePerPage: 2.3,
+      totalPages: null,
+      copiesRequested: 1,
+      totalPagesToPrint: null,
+      estimatedAmount: null,
+      finalAmount: null,
+      currency: "INR",
+      taxPercent: 0,
+      taxAmount: 0,
+      discountCode: null,
+      discountAmount: 0,
+    },
+    paymentStatus: {
+      status: "pending",
+      paymentMethod: "cashfree",
+      transactionId: null,
+      paidAt: null,
+      paymentGatewayResponse: null,
+    },
+    printStatus: {
+      status: "uploaded",
+      retrievedAt: null,
+      printStartedAt: null,
+      printCompletedAt: null,
+      durationSeconds: null,
+      printErrorCode: null,
+      printErrorMessage: null,
+      printerJobId: null,
+    },
+    timeline: {
+      createdAt: createdAtMs,
+      uploadedAt: createdAtMs,
+      conversionStartedAt: null,
+      conversionCompletedAt: null,
+      orderCreatedAt: null,
+      paymentInitiatedAt: null,
+      paymentCompletedAt: null,
+      retrievedAt: null,
+      printStartedAt: null,
+      printCompletedAt: null,
+      expiresAt: null,
+    },
+    metadata: {
+      ipAddress: ipAddress || null,
+      userAgent: userAgent || null,
+      sessionId: sessionId || null,
+      tags: [],
+    },
+  };
+};
+
 const isSupportedUpload = (file) => {
   const ext = path.extname(file?.originalname || "").toLowerCase();
   return SUPPORTED_EXTENSIONS.has(ext);
@@ -295,18 +403,38 @@ const uploadToStorage = async (file) => {
 app.post("/register", async (req, res) => {
   try {
     const { username, password, email, mobileNumber } = req.body;
-    const existing = await db.collection("users").where("email", "==", email).get();
+    const existing = await db.collection(COLLECTIONS.USERS).where("email", "==", email).get();
     if (!existing.empty) {
       return res.status(400).send("User already exists");
     }
     const hashedPassword = await bcrypt.hash(password, 10);
-    await db.collection("users").add({
-      id: uuidv4(),
+    const userId = uuidv4();
+    const timestamp = nowMs();
+    await db.collection(COLLECTIONS.USERS).add({
+      id: userId,
+      userId,
       username,
+      name: username,
       password: hashedPassword,
+      passwordHash: hashedPassword,
       email,
       mobileNumber,
+      phoneNumber: mobileNumber || "",
       googleUser: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      accountStatus: "active",
+      totalSpent: 0,
+      totalPagesPrinted: 0,
+      preferredPaymentMethod: "cashfree",
+      lastLoginAt: null,
+      defaultPrintSettings: {
+        colorMode: "bw",
+        layout: "single",
+        paperSize: "a4",
+      },
+      isVerified: false,
+      verificationMethod: "email",
     });
     res.send("Registered successfully");
   } catch (err) {
@@ -349,22 +477,42 @@ app.post("/google-login", async (req, res) => {
     const payload = ticket.getPayload();
     const email = payload.email;
     const name = payload.name;
-    const snapshot = await db.collection("users").where("email", "==", email).get();
+    const snapshot = await db.collection(COLLECTIONS.USERS).where("email", "==", email).get();
     let userId;
     if (snapshot.empty) {
       userId = uuidv4();
-      await db.collection("users").add({
+      const timestamp = nowMs();
+      await db.collection(COLLECTIONS.USERS).add({
         id: userId,
+        userId,
         username: name,
+        name,
         email,
         password: null,
+        passwordHash: null,
         mobileNumber: "",
+        phoneNumber: "",
         googleUser: true,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        accountStatus: "active",
+        totalSpent: 0,
+        totalPagesPrinted: 0,
+        preferredPaymentMethod: "cashfree",
+        lastLoginAt: timestamp,
+        defaultPrintSettings: {
+          colorMode: "bw",
+          layout: "single",
+          paperSize: "a4",
+        },
+        isVerified: true,
+        verificationMethod: "google",
       });
     } else {
       const doc = snapshot.docs[0];
       // Fall back to Firestore doc ID if custom id field is missing
       userId = doc.data().id || doc.id;
+      await doc.ref.update({ updatedAt: nowMs(), lastLoginAt: nowMs() });
     }
     if (!userId) return res.status(500).send("User ID missing in database");
     const jwtToken = jwt.sign({ userId }, SECRET_KEY);
@@ -458,7 +606,7 @@ app.get("/settings", authenticateToken, async (req, res) => {
     const snapshot = await db.collection("users").where("id", "==", userId).get();
     if (snapshot.empty) return res.status(404).send("User not found");
     const user = snapshot.docs[0].data();
-    res.json(user.settings || {});
+    res.json(user.settings || undefined);
   } catch (err) {
     console.error(err);
     res.status(500).send("Failed to fetch settings");
@@ -487,10 +635,11 @@ app.get("/mimo/coins", authenticateToken, async (req, res) => {
 app.post("/payment-success", authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const now = new Date();
+    const paidAtMs = nowMs();
+    const paidAtDate = new Date(paidAtMs);
 
     const snapshot = await db
-      .collection("printJobs")
+      .collection(COLLECTIONS.PRINT_JOBS)
       .where("userId", "==", userId)
       .where("status", "==", "pending")
       .get();
@@ -500,19 +649,38 @@ app.post("/payment-success", authenticateToken, async (req, res) => {
     }
 
     const pin = await generateUniquePin();
-    const expiresAt = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+    const expiresAtMs = paidAtMs + 12 * 60 * 60 * 1000;
+    const expiresAt = new Date(expiresAtMs);
 
     const batch = db.batch();
 
     snapshot.forEach((doc) => {
+      const existing = doc.data();
       batch.update(doc.ref, {
         status: "paid",
         pin,
         printCode: pin,
-        codeCreatedAt: now,
+        codeCreatedAt: paidAtDate,
         codeExpiresAt: expiresAt,
         isPrinted: false,
         printerStatus: "ready",
+        paymentStatus: {
+          ...(existing.paymentStatus || undefined),
+          status: "completed",
+          paymentMethod: "cashfree",
+          transactionId: null,
+          paidAt: paidAtMs,
+          paymentGatewayResponse: existing.paymentStatus?.paymentGatewayResponse || null,
+        },
+        printStatus: {
+          ...(existing.printStatus || undefined),
+          status: "ready",
+        },
+        timeline: {
+          ...(existing.timeline || undefined),
+          paymentCompletedAt: paidAtMs,
+          expiresAt: expiresAtMs,
+        },
       });
     });
 
@@ -527,7 +695,7 @@ app.post("/payment-success", authenticateToken, async (req, res) => {
     setImmediate(async () => {
       try {
         const paidJobs = await db
-          .collection("printJobs")
+          .collection(COLLECTIONS.PRINT_JOBS)
           .where("userId", "==", userId)
           .where("pin", "==", pin)
           .get();
@@ -569,7 +737,7 @@ app.post("/upload", authenticateToken, upload.array("files"), async (req, res) =
 
     // Clear old pending jobs
     const oldJobs = await db
-      .collection("printJobs")
+      .collection(COLLECTIONS.PRINT_JOBS)
       .where("userId", "==", userId)
       .where("status", "==", "pending")
       .get();
@@ -578,7 +746,7 @@ app.post("/upload", authenticateToken, upload.array("files"), async (req, res) =
     }
 
     const oldConversionJobs = await db
-      .collection("printJobs")
+      .collection(COLLECTIONS.PRINT_JOBS)
       .where("userId", "==", userId)
       .where("status", "==", "pending_conversion")
       .get();
@@ -591,13 +759,19 @@ app.post("/upload", authenticateToken, upload.array("files"), async (req, res) =
       const fileUpload = bucket.file(fileName);
       await fileUpload.save(file.buffer);
 
-      await db.collection("printJobs").add({
-        userId,
-        sourceFileName: file.originalname,
-        fileUrl: `gs://${bucket.name}/${fileName}`,
-        status: "pending_conversion",
-        createdAt: new Date(),
-      });
+      const fileUrl = `gs://${bucket.name}/${fileName}`;
+      const jobRef = db.collection(COLLECTIONS.PRINT_JOBS).doc();
+      await jobRef.set(
+        buildPrintJobUploadDoc({
+          userId,
+          jobId: jobRef.id,
+          file,
+          fileUrl,
+          sessionId: req.headers["x-session-id"],
+          ipAddress: req.ip,
+          userAgent: req.headers["user-agent"],
+        })
+      );
     });
 
     await Promise.all(uploadPromises);
@@ -623,7 +797,7 @@ app.post("/upload", authenticateToken, upload.array("files"), async (req, res) =
 app.post("/internal/process-conversions", async (_req, res) => {
   try {
     const snapshot = await db
-      .collection("printJobs")
+      .collection(COLLECTIONS.PRINT_JOBS)
       .where("status", "==", "pending_conversion")
       .limit(1)
       .get();
@@ -651,12 +825,43 @@ app.post("/internal/process-conversions", async (_req, res) => {
       const convertedFile = bucket.file(convertedFileName);
       await convertedFile.save(pdfBuffer);
 
+      const convertedAtMs = nowMs();
+      const conversionStartedMs = jobData?.timeline?.conversionStartedAt || convertedAtMs;
+      const estimatedAmount = Number((pageCount * 2.3).toFixed(2));
+
       await jobDoc.ref.update({
         fileName: outputFileName,
         pageCount,
         fileUrl: `gs://${bucket.name}/${convertedFileName}`,
         status: "pending",
-        conversionCompletedAt: new Date(),
+        conversionCompletedAt: new Date(convertedAtMs),
+        conversionDetails: {
+          ...(jobData.conversionDetails || undefined),
+          convertedAt: convertedAtMs,
+          originalPageCount: pageCount,
+          actualPageCount: pageCount,
+          isConverting: false,
+          conversionDurationMs: Math.max(0, convertedAtMs - conversionStartedMs),
+          conversionSuccess: true,
+          conversionError: null,
+          storagePath: `gs://${bucket.name}/${convertedFileName}`,
+          storageSizeBytes: Number(pdfBuffer.length || 0),
+        },
+        pricing: {
+          ...(jobData.pricing || undefined),
+          totalPages: pageCount,
+          totalPagesToPrint: pageCount,
+          estimatedAmount,
+          finalAmount: estimatedAmount,
+        },
+        printStatus: {
+          ...(jobData.printStatus || undefined),
+          status: "pending_payment",
+        },
+        timeline: {
+          ...(jobData.timeline || undefined),
+          conversionCompletedAt: convertedAtMs,
+        },
       });
 
       return res.json({ processed: 1, jobId: jobDoc.id, pageCount });
@@ -665,6 +870,17 @@ app.post("/internal/process-conversions", async (_req, res) => {
         status: "conversion_failed",
         conversionError: conversionErr.message,
         failedAt: new Date(),
+        conversionDetails: {
+          ...(jobData.conversionDetails || undefined),
+          isConverting: false,
+          conversionSuccess: false,
+          conversionError: conversionErr.message,
+        },
+        printStatus: {
+          ...(jobData.printStatus || undefined),
+          status: "error",
+          printErrorMessage: conversionErr.message,
+        },
       });
       return res.status(500).json({ processed: 0, error: "Conversion failed" });
     }
@@ -677,7 +893,7 @@ app.post("/internal/process-conversions", async (_req, res) => {
 // ================= HELPER: PROCESS ALL PENDING CONVERSIONS FOR USER =================
 const processPendingConversionsForUser = async (userId) => {
   const jobs = await db
-    .collection("printJobs")
+    .collection(COLLECTIONS.PRINT_JOBS)
     .where("userId", "==", userId)
     .where("status", "==", "pending_conversion")
     .get();
@@ -697,6 +913,14 @@ const processPendingConversionsForUser = async (userId) => {
       transaction.update(doc.ref, {
         isConverting: true,
         conversionStartedAt: new Date(),
+        conversionDetails: {
+          ...(latestData.conversionDetails || undefined),
+          isConverting: true,
+        },
+        timeline: {
+          ...(latestData.timeline || undefined),
+          conversionStartedAt: nowMs(),
+        },
       });
 
       return latestData;
@@ -722,13 +946,44 @@ const processPendingConversionsForUser = async (userId) => {
       const convertedFile = bucket.file(convertedFileName);
       await convertedFile.save(pdfBuffer);
 
+      const convertedAtMs = nowMs();
+      const conversionStartedMs = jobData?.timeline?.conversionStartedAt || convertedAtMs;
+      const estimatedAmount = Number((pageCount * 2.3).toFixed(2));
+
       await doc.ref.update({
         fileName: outputFileName,
         pageCount,
         fileUrl: `gs://${bucket.name}/${convertedFileName}`,
         status: "pending",
         isConverting: false,
-        conversionCompletedAt: new Date(),
+        conversionCompletedAt: new Date(convertedAtMs),
+        conversionDetails: {
+          ...(jobData.conversionDetails || undefined),
+          convertedAt: convertedAtMs,
+          originalPageCount: pageCount,
+          actualPageCount: pageCount,
+          isConverting: false,
+          conversionDurationMs: Math.max(0, convertedAtMs - conversionStartedMs),
+          conversionSuccess: true,
+          conversionError: null,
+          storagePath: `gs://${bucket.name}/${convertedFileName}`,
+          storageSizeBytes: Number(pdfBuffer.length || 0),
+        },
+        pricing: {
+          ...(jobData.pricing || undefined),
+          totalPages: pageCount,
+          totalPagesToPrint: pageCount,
+          estimatedAmount,
+          finalAmount: estimatedAmount,
+        },
+        printStatus: {
+          ...(jobData.printStatus || undefined),
+          status: "pending_payment",
+        },
+        timeline: {
+          ...(jobData.timeline || undefined),
+          conversionCompletedAt: convertedAtMs,
+        },
       });
     } catch (conversionErr) {
       await doc.ref.update({
@@ -736,6 +991,17 @@ const processPendingConversionsForUser = async (userId) => {
         isConverting: false,
         conversionError: conversionErr.message,
         failedAt: new Date(),
+        conversionDetails: {
+          ...(jobData.conversionDetails || undefined),
+          isConverting: false,
+          conversionSuccess: false,
+          conversionError: conversionErr.message,
+        },
+        printStatus: {
+          ...(jobData.printStatus || undefined),
+          status: "error",
+          printErrorMessage: conversionErr.message,
+        },
       });
     }
   }
@@ -750,7 +1016,7 @@ app.post("/create-order", authenticateToken, async (req, res) => {
     await processPendingConversionsForUser(userId);
 
     const jobsSnapshot = await db
-      .collection("printJobs")
+      .collection(COLLECTIONS.PRINT_JOBS)
       .where("userId", "==", userId)
       .where("status", "==", "pending")
       .get();
@@ -783,12 +1049,60 @@ app.post("/create-order", authenticateToken, async (req, res) => {
       "Cashfree order creation"
     );
 
-    await db.collection("orders").add({
+    const orderCreatedAtMs = nowMs();
+
+    await db.collection(COLLECTIONS.ORDERS).add({
       orderId,
       userId,
       amount,
       status: "CREATED",
       createdAt: new Date(),
+    });
+
+    const jobsBatch = db.batch();
+    jobsSnapshot.forEach((jobDoc) => {
+      jobsBatch.update(jobDoc.ref, {
+        orderId,
+        timeline: {
+          ...(jobDoc.data().timeline || undefined),
+          orderCreatedAt: orderCreatedAtMs,
+          paymentInitiatedAt: orderCreatedAtMs,
+        },
+        paymentStatus: {
+          ...(jobDoc.data().paymentStatus || undefined),
+          status: "initiated",
+          paymentMethod: "cashfree",
+          paymentGatewayResponse: {
+            orderId,
+            sessionId: response.data.payment_session_id,
+          },
+        },
+      });
+    });
+    await jobsBatch.commit();
+
+    await db.collection(COLLECTIONS.PAYMENT_TRANSACTIONS).add({
+      transactionId: `txn_${Date.now()}`,
+      userId,
+      orderId,
+      jobIds: jobsSnapshot.docs.map((d) => d.id),
+      paymentGateway: "cashfree",
+      gatewayTransactionId: null,
+      orderDetails: {
+        description: `Print order - ${jobsSnapshot.size} job(s)`,
+        amount,
+        currency: "INR",
+        orderTimestamp: orderCreatedAtMs,
+      },
+      paymentAttempt: {
+        attemptNumber: 1,
+        initiatedAt: orderCreatedAtMs,
+        sessionId: response.data.payment_session_id,
+        paymentMethod: "cashfree",
+      },
+      status: "initiated",
+      createdAt: orderCreatedAtMs,
+      updatedAt: orderCreatedAtMs,
     });
 
     res.json({
@@ -842,20 +1156,53 @@ app.post("/cashfree-webhook", express.raw({ type: "application/json" }), async (
     if (event.type === "PAYMENT_SUCCESS_WEBHOOK") {
       const orderId = event.data.order.order_id;
       const userId = event.data.customer_details.customer_id;
+      const paidAtMs = nowMs();
 
-      const orders = await db.collection("orders").where("orderId", "==", orderId).get();
+      const orders = await db.collection(COLLECTIONS.ORDERS).where("orderId", "==", orderId).get();
       const orderBatch = db.batch();
       orders.forEach((doc) => orderBatch.update(doc.ref, { status: "PAID" }));
       await orderBatch.commit();
 
       const jobs = await db
-        .collection("printJobs")
+        .collection(COLLECTIONS.PRINT_JOBS)
         .where("userId", "==", userId)
         .where("status", "==", "pending")
         .get();
       const jobsBatch = db.batch();
-      jobs.forEach((doc) => jobsBatch.update(doc.ref, { status: "paid" }));
+      jobs.forEach((doc) => {
+        jobsBatch.update(doc.ref, {
+          status: "paid",
+          paymentStatus: {
+            ...(doc.data().paymentStatus || undefined),
+            status: "completed",
+            paidAt: paidAtMs,
+          },
+          printStatus: {
+            ...(doc.data().printStatus || undefined),
+            status: "ready",
+          },
+          timeline: {
+            ...(doc.data().timeline || undefined),
+            paymentCompletedAt: paidAtMs,
+          },
+        });
+      });
       await jobsBatch.commit();
+
+      const txns = await db
+        .collection(COLLECTIONS.PAYMENT_TRANSACTIONS)
+        .where("orderId", "==", orderId)
+        .where("status", "==", "initiated")
+        .get();
+      const txnBatch = db.batch();
+      txns.forEach((txnDoc) => {
+        txnBatch.update(txnDoc.ref, {
+          status: "completed",
+          gatewayTransactionId: event?.data?.payment?.cf_payment_id || null,
+          updatedAt: paidAtMs,
+        });
+      });
+      await txnBatch.commit();
     }
 
     res.sendStatus(200);
@@ -961,9 +1308,21 @@ app.post("/get-documents-by-code", async (req, res) => {
       });
 
       // 🔄 Mark as printing
+      const transitionMs = nowMs();
       await doc.ref.update({
         printerStatus: "printing",
         status: "printing",
+        printStatus: {
+          ...(data.printStatus || undefined),
+          status: "printing",
+          retrievedAt: transitionMs,
+          printStartedAt: transitionMs,
+        },
+        timeline: {
+          ...(data.timeline || undefined),
+          retrievedAt: transitionMs,
+          printStartedAt: transitionMs,
+        },
       });
     }
 
