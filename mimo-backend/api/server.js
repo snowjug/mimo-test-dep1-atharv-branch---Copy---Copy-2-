@@ -54,6 +54,25 @@ const COLLECTIONS = {
 
 const nowMs = () => Date.now();
 
+const toMillis = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.toDate === "function") {
+    const date = value.toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const formatLocalDateTime = (value) => {
+  const millis = toMillis(value);
+  return millis === null ? "N/A" : new Date(millis).toLocaleString();
+};
+
 const emitOpsAlert = async ({ code, severity = "medium", message, context = {} }) => {
   const payload = {
     code,
@@ -1551,6 +1570,8 @@ app.get("/print-history", authenticateToken, async (req, res) => {
 
     const history = snapshot.docs.map((doc) => {
   const data = doc.data();
+  const createdAtMs = toMillis(data.createdAt || data.timeline?.createdAt || data.timeline?.uploadedAt);
+  const createdAtLabel = formatLocalDateTime(createdAtMs);
 
   let printerStatus = data.printerStatus || "Pending";
 
@@ -1563,15 +1584,19 @@ app.get("/print-history", authenticateToken, async (req, res) => {
 
   return {
     id: doc.id,
-    file: data.fileName,
+    file: data.fileName || data.sourceFileName || "Unnamed file",
+    documentName: data.fileName || data.sourceFileName || "Unnamed file",
     details: `${data.pageCount} pages`,
     cost: `₹${(data.pageCount * PRICE_PER_PAGE).toFixed(2)}`,
     status: data.status,
-    printerStatus,                 // ✅ ADD THIS
+    printerStatus,
     printCode: data.printCode || "-",
-    date: data.createdAt
-      ? new Date(data.createdAt.toDate()).toLocaleString()
-      : "N/A",
+    createdAt: createdAtMs,
+    createdAtMs,
+    createdAtLabel,
+    date: createdAtMs,
+    dateMs: createdAtMs,
+    dateLabel: createdAtLabel,
   };
 });
 

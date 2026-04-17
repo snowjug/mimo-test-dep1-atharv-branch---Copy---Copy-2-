@@ -5,6 +5,14 @@ const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3
 export function PrintHistory() {
   const [history, setHistory] = useState<any[]>([]);
 
+  const formatDate = (job: any) => {
+    const millis = job.createdAtMs ?? job.dateMs ?? job.createdAt ?? job.date;
+    if (millis === null || millis === undefined) return "N/A";
+
+    const parsed = typeof millis === "number" ? millis : Date.parse(millis);
+    return Number.isNaN(parsed) ? "N/A" : new Date(parsed).toLocaleString();
+  };
+
   useEffect(() => {
     const fetchHistory = async () => {
       try {
@@ -37,9 +45,9 @@ export function PrintHistory() {
           {history.map((job) => (
             <div key={job._id} className="p-4 border rounded-lg bg-white">
               <p><strong>Code:</strong> {job.printCode}</p>
-              <p><strong>File:</strong> {job.documentName}</p>
+              <p><strong>File:</strong> {job.documentName || job.file}</p>
               <p><strong>Status:</strong> {job.status}</p>
-              <p><strong>Date:</strong> {new Date(job.createdAt).toLocaleString()}</p>
+              <p><strong>Date:</strong> {formatDate(job)}</p>
             </div>
           ))}
         </div>

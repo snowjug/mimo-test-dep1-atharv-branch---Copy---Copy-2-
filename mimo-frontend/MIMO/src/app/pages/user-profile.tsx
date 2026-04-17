@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -11,27 +11,23 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import { Avatar, AvatarFallback } from "../components/ui/avatar";
 import { Badge } from "../components/ui/badge";
 import { Separator } from "../components/ui/separator";
-import { MimoCoinsDisplay } from "../components/mimo-coins-display";
 import { MimoHeader } from "../components/mimo-header";
-import { User, Mail, Phone, Building, Save, Printer, Bell, FileText, Gift } from "lucide-react";
+import { User, Mail, Phone, Save, Bell, FileText, Gift } from "lucide-react";
 import { toast } from "sonner";
 
 const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
 
 
 export function UserProfile() {
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [printHistory, setPrintHistory] = useState<any[]>([]);
   const [name, setName] = useState(() => localStorage.getItem("mimo_user_name") || "Admin User");
   const [email, setEmail] = useState("admin@mimo.com");
   const [phone, setPhone] = useState("+91 98765 43210");
-  const [company, setCompany] = useState("MIMO Technologies");
   const [emailNotifications, setEmailNotifications] = useState(true);
-  const [smsNotifications, setSmsNotifications] = useState(false);
   const [printCompleteNotif, setPrintCompleteNotif] = useState(true);
   const [marketingEmails, setMarketingEmails] = useState(false);
-  const [mimoCoinsInfo, setMimoCoinsInfo] = useState<{ balance: number; totalEarned: number; totalUsed: number; history: any[] }>({ balance: 0, totalEarned: 0, totalUsed: 0, history: [] });
+  const [mimoCoinsInfo] = useState<{ balance: number; totalEarned: number; totalUsed: number; history: any[] }>({ balance: 0, totalEarned: 0, totalUsed: 0, history: [] });
 
   useEffect(() => {
   const fetchHistory = async () => {
@@ -119,8 +115,48 @@ export function UserProfile() {
     toast.error("Failed to update profile");
   }
 };
+  const getHistoryTimestamp = (job: any) => {
+  const rawValue = job.createdAtMs ?? job.dateMs ?? job.createdAt ?? job.date;
+
+  if (rawValue === null || rawValue === undefined) {
+    return 0;
+  }
+
+  if (typeof rawValue === "number") {
+    return rawValue;
+  }
+
+  const parsed = Date.parse(rawValue);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+  const formatHistoryDate = (job: any) => {
+  const timestamp = getHistoryTimestamp(job);
+  return timestamp > 0 ? new Date(timestamp).toLocaleString() : "N/A";
+};
+
+  const getPrinterStatusClass = (printerStatus: string) => {
+  if (printerStatus === "Ready to Print") {
+    return "bg-blue-100 text-blue-700";
+  }
+
+  if (printerStatus === "Printing") {
+    return "bg-yellow-100 text-yellow-700";
+  }
+
+  if (printerStatus === "Completed") {
+    return "bg-green-100 text-green-700";
+  }
+
+  if (printerStatus === "Expired") {
+    return "bg-gray-200 text-gray-600";
+  }
+
+  return "bg-red-100 text-red-700";
+};
+
   const sortedHistory = [...printHistory].sort((a, b) => {
-  return new Date(b.date).getTime() - new Date(a.date).getTime();
+  return getHistoryTimestamp(b) - getHistoryTimestamp(a);
      // latest first
 });
   return (
@@ -299,25 +335,13 @@ export function UserProfile() {
                         </TableCell>
                         <TableCell>
                           <Badge
-                            className={`
-                              ${
-                                job.printerStatus === "Ready to Print"
-                                  ? "bg-blue-100 text-blue-700"
-                                  : job.printerStatus === "Printing"
-                                  ? "bg-yellow-100 text-yellow-700"
-                                  : job.printerStatus === "Completed"
-                                  ? "bg-green-100 text-green-700"
-                                  : job.printerStatus === "Expired"
-                                  ? "bg-gray-200 text-gray-600"
-                                  : "bg-red-100 text-red-700"
-                              }
-                            `}
+                            className={getPrinterStatusClass(job.printerStatus)}
                           >
                             {job.printerStatus}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right text-sm text-gray-500">
-                          {job.date}
+                          {formatHistoryDate(job)}
                         </TableCell>
                       </TableRow>
                     ))}
