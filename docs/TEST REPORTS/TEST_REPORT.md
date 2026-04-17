@@ -3,6 +3,7 @@
 ## Latest Addendum
 
 - [Stabilization Fixes Report (2026-04-17)](./STABILIZATION_FIXES_REPORT_2026-04-17.md)
+- [Reliability Hardening Report (2026-04-17)](./RELIABILITY_HARDENING_REPORT_2026-04-17.md)
 
 **Date**: April 17, 2026  
 **Test Run #**: 1  

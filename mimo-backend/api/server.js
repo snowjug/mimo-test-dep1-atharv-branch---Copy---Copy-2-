@@ -19,11 +19,20 @@ const { OAuth2Client } = require("google-auth-library");
 const crypto = require("node:crypto");
 const libre = require("libreoffice-convert");
 const { db, bucket } = require("./firebase");
+const {
+  PRICE_PER_PAGE,
+  normalizeApiError,
+  buildUploadApiResponse,
+  summarizeOps,
+  detectOpsAlerts,
+} = require("./flow-utils");
 
 const libreConvert = promisify(libre.convert);
 
 const FASTAPI_PRINT_URL = process.env.FASTAPI_PRINT_URL || process.env.NEXT_PUBLIC_FASTAPI_PRINT_URL;
 const TEST_PRINT_MODE = String(process.env.TEST_PRINT_MODE || "").toLowerCase() === "true";
+const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
+const OPS_DASHBOARD_KEY = process.env.OPS_DASHBOARD_KEY || "";
 
 const SUPPORTED_EXTENSIONS = new Set([
   ".pdf",
@@ -44,6 +53,45 @@ const COLLECTIONS = {
 };
 
 const nowMs = () => Date.now();
+
+const emitOpsAlert = async ({ code, severity = "medium", message, context = {} }) => {
+  const payload = {
+    code,
+    severity,
+    message,
+    context,
+    createdAt: nowMs(),
+  };
+
+  try {
+    await db.collection("ops_alerts").add(payload);
+  } catch (err) {
+    console.warn("Failed to persist ops alert:", err.message);
+  }
+
+  if (OPS_ALERT_WEBHOOK_URL) {
+    try {
+      await axios.post(OPS_ALERT_WEBHOOK_URL, payload, { timeout: 5000 });
+    } catch (err) {
+      console.warn("Failed to send ops webhook alert:", err.message);
+    }
+  }
+};
+
+const sendApiError = (res, status, error, fallbackCode, fallbackMessage) => {
+  const normalized = normalizeApiError(error, fallbackCode, fallbackMessage);
+  return res.status(status).json({
+    ok: false,
+    error: normalized,
+  });
+};
+
+const sendApiSuccess = (res, payload, status = 200) => {
+  return res.status(status).json({
+    ok: true,
+    ...payload,
+  });
+};
 
 const defaultPrintOptions = {
   copies: 1,
@@ -92,7 +140,7 @@ const buildPrintJobUploadDoc = ({ userId, jobId, file, fileUrl, sessionId, ipAdd
     },
     printOptions: { ...defaultPrintOptions },
     pricing: {
-      pricePerPage: 2.3,
+      pricePerPage: PRICE_PER_PAGE,
       totalPages: null,
       copiesRequested: 1,
       totalPagesToPrint: null,
@@ -325,6 +373,45 @@ app.get("/", (_req, res) => {
 
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok" });
+});
+
+app.get("/ops/checks", async (req, res) => {
+  try {
+    if (OPS_DASHBOARD_KEY && req.headers["x-ops-key"] !== OPS_DASHBOARD_KEY) {
+      return sendApiError(res, 403, null, "forbidden", "Invalid ops key");
+    }
+
+    const [pendingConversionSnap, pendingPaymentSnap, paidReadySnap, kioskSnap] = await Promise.all([
+      db.collection(COLLECTIONS.PRINT_JOBS).where("status", "==", "pending_conversion").get(),
+      db.collection(COLLECTIONS.PRINT_JOBS).where("status", "==", "pending").get(),
+      db.collection(COLLECTIONS.PRINT_JOBS).where("status", "==", "paid").get(),
+      db.collection(COLLECTIONS.KIOSK_MACHINES).get(),
+    ]);
+
+    const opsSummary = summarizeOps({
+      pendingConversionCount: pendingConversionSnap.size,
+      pendingPaymentCount: pendingPaymentSnap.size,
+      paidReadyCount: paidReadySnap.size,
+      kiosks: kioskSnap.docs.map((doc) => doc.data()),
+    });
+
+    const alerts = detectOpsAlerts(opsSummary, {
+      backlogThreshold: Number(process.env.OPS_BACKLOG_THRESHOLD || 25),
+    });
+
+    for (const alert of alerts) {
+      await emitOpsAlert(alert);
+    }
+
+    return sendApiSuccess(res, {
+      checks: opsSummary,
+      alertsTriggered: alerts.length,
+      alerts,
+    });
+  } catch (err) {
+    console.error(err);
+    return sendApiError(res, 500, err, "ops_checks_failed", "Failed to run ops checks");
+  }
 });
 
 // ================= CASHFREE =================
@@ -645,7 +732,23 @@ app.post("/payment-success", authenticateToken, async (req, res) => {
       .get();
 
     if (snapshot.empty) {
-      return res.status(400).json({ error: "No pending jobs found" });
+      const alreadyPaid = await db
+        .collection(COLLECTIONS.PRINT_JOBS)
+        .where("userId", "==", userId)
+        .where("status", "==", "paid")
+        .limit(1)
+        .get();
+
+      if (!alreadyPaid.empty) {
+        const existing = alreadyPaid.docs[0].data();
+        return sendApiSuccess(res, {
+          message: "Payment already marked successful",
+          pin: existing.pin || existing.printCode || null,
+          printCode: existing.pin || existing.printCode || null,
+        });
+      }
+
+      return sendApiError(res, 400, null, "no_pending_jobs", "No pending jobs found");
     }
 
     const pin = await generateUniquePin();
@@ -686,7 +789,7 @@ app.post("/payment-success", authenticateToken, async (req, res) => {
 
     await batch.commit();
 
-    res.json({
+    sendApiSuccess(res, {
       message: "Payment success",
       pin,
       printCode: pin,
@@ -716,7 +819,13 @@ app.post("/payment-success", authenticateToken, async (req, res) => {
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Payment update failed" });
+    await emitOpsAlert({
+      code: "payment_update_failed",
+      severity: "high",
+      message: "Payment success update failed",
+      context: { details: err.message || String(err) },
+    });
+    sendApiError(res, 500, err, "payment_update_failed", "Payment update failed");
   }
 });
 
@@ -724,15 +833,19 @@ app.post("/payment-success", authenticateToken, async (req, res) => {
 app.post("/upload", authenticateToken, upload.array("files"), async (req, res) => {
   try {
     const userId = req.user.userId;
-    if (!userId) return res.status(401).send("User ID missing from token");
+    if (!userId) return sendApiError(res, 401, null, "unauthorized", "User ID missing from token");
 
     if (!req.files || req.files.length === 0) {
-      return res.status(400).send("At least one file is required");
+      return sendApiError(res, 400, null, "files_required", "At least one file is required");
     }
 
     const invalidFile = req.files.find((file) => !isSupportedUpload(file));
     if (invalidFile) {
-      return res.status(400).send("Supported files: PDF, DOC, DOCX, TXT, JPG, JPEG, PNG");
+      return sendApiError(res, 400, null, "unsupported_file_type", "Supported files: PDF, DOC, DOCX, TXT, JPG, JPEG, PNG");
+    }
+
+    if (req.files.length > Number(process.env.MAX_UPLOAD_FILES || 10)) {
+      return sendApiError(res, 400, null, "too_many_files", "Too many files in a single upload request");
     }
 
     // Clear old pending jobs
@@ -785,8 +898,6 @@ app.post("/upload", authenticateToken, upload.array("files"), async (req, res) =
     await processPendingConversionsForUser(userId);
 
     const results = [];
-    let totalPages = 0;
-    let totalAmount = 0;
 
     for (const queuedJob of queuedJobs) {
       const docSnap = await db.collection(COLLECTIONS.PRINT_JOBS).doc(queuedJob.jobId).get();
@@ -801,11 +912,9 @@ app.post("/upload", authenticateToken, upload.array("files"), async (req, res) =
 
       const data = docSnap.data();
       const pageCount = Number(data?.pageCount || data?.pricing?.totalPages || 0);
-      const amount = Number(data?.pricing?.finalAmount || pageCount * 2.3 || 0);
+      const amount = Number(data?.pricing?.finalAmount || pageCount * PRICE_PER_PAGE || 0);
 
       if (data.status === "pending") {
-        totalPages += pageCount;
-        totalAmount += amount;
         results.push({
           jobId: docSnap.id,
           fileName: queuedJob.fileName,
@@ -824,22 +933,10 @@ app.post("/upload", authenticateToken, upload.array("files"), async (req, res) =
       }
     }
 
-    const completedCount = results.filter((r) => r.status === "completed").length;
-    const failedCount = results.length - completedCount;
-
-    return res.json({
-      message: failedCount > 0 ? "Some files failed to process" : "Files uploaded and processed",
-      filesUploaded: req.files.length,
-      completedFiles: completedCount,
-      failedFiles: failedCount,
-      totalPages,
-      amount: Number(totalAmount.toFixed(2)),
-      status: failedCount > 0 ? "partial_success" : "ready",
-      files: results,
-    });
+    return sendApiSuccess(res, buildUploadApiResponse(results, req.files.length));
   } catch (err) {
     console.error(err);
-    res.status(500).send("Upload failed");
+    sendApiError(res, 500, err, "upload_failed", "Upload failed");
   }
 });
 
@@ -876,7 +973,7 @@ app.post("/internal/process-conversions", async (_req, res) => {
 
       const convertedAtMs = nowMs();
       const conversionStartedMs = jobData?.timeline?.conversionStartedAt || convertedAtMs;
-      const estimatedAmount = Number((pageCount * 2.3).toFixed(2));
+      const estimatedAmount = Number((pageCount * PRICE_PER_PAGE).toFixed(2));
 
       await jobDoc.ref.update({
         fileName: outputFileName,
@@ -935,7 +1032,7 @@ app.post("/internal/process-conversions", async (_req, res) => {
     }
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: "Failed to process conversions" });
+    return sendApiError(res, 500, err, "process_conversions_failed", "Failed to process conversions");
   }
 });
 
@@ -997,7 +1094,7 @@ const processPendingConversionsForUser = async (userId) => {
 
       const convertedAtMs = nowMs();
       const conversionStartedMs = jobData?.timeline?.conversionStartedAt || convertedAtMs;
-      const estimatedAmount = Number((pageCount * 2.3).toFixed(2));
+      const estimatedAmount = Number((pageCount * PRICE_PER_PAGE).toFixed(2));
 
       await doc.ref.update({
         fileName: outputFileName,
@@ -1035,6 +1132,17 @@ const processPendingConversionsForUser = async (userId) => {
         },
       });
     } catch (conversionErr) {
+      await emitOpsAlert({
+        code: "conversion_failed",
+        severity: "high",
+        message: "Conversion failed for print job",
+        context: {
+          jobId: doc.id,
+          userId,
+          reason: conversionErr.message || "Unknown conversion error",
+        },
+      });
+
       await doc.ref.update({
         status: "conversion_failed",
         isConverting: false,
@@ -1070,12 +1178,39 @@ app.post("/create-order", authenticateToken, async (req, res) => {
       .where("status", "==", "pending")
       .get();
 
-    if (jobsSnapshot.empty) return res.status(400).send("No pending jobs");
+    if (jobsSnapshot.empty) {
+      const failedJobs = await db
+        .collection(COLLECTIONS.PRINT_JOBS)
+        .where("userId", "==", userId)
+        .where("status", "==", "conversion_failed")
+        .limit(5)
+        .get();
+
+      if (!failedJobs.empty) {
+        return sendApiError(
+          res,
+          409,
+          {
+            code: "conversion_failed_jobs",
+            message: "Some uploaded files failed conversion",
+            details: failedJobs.docs.map((doc) => ({
+              jobId: doc.id,
+              fileName: doc.data().sourceFileName || "unknown",
+              reason: doc.data().conversionError || "Conversion failed",
+            })),
+          },
+          "conversion_failed_jobs",
+          "Some uploaded files failed conversion"
+        );
+      }
+
+      return sendApiError(res, 400, null, "no_pending_jobs", "No pending jobs");
+    }
 
     let totalPages = 0;
     jobsSnapshot.forEach((doc) => { totalPages += doc.data().pageCount; });
 
-    const amount = Number((totalPages * 2.3).toFixed(2));
+    const amount = Number((totalPages * PRICE_PER_PAGE).toFixed(2));
     const orderId = "order_" + Date.now();
 
     // FIX: Add timeout to prevent hangs and duplicate orders
@@ -1154,7 +1289,7 @@ app.post("/create-order", authenticateToken, async (req, res) => {
       updatedAt: orderCreatedAtMs,
     });
 
-    res.json({
+    sendApiSuccess(res, {
       orderId,
       paymentSessionId: response.data.payment_session_id,
       amount,
@@ -1162,7 +1297,19 @@ app.post("/create-order", authenticateToken, async (req, res) => {
   } catch (err) {
     const details = err.response?.data || err.message;
     console.error(details);
-    res.status(500).json({ error: "Order creation failed", details });
+    await emitOpsAlert({
+      code: "order_creation_failed",
+      severity: "high",
+      message: "Cashfree order creation failed",
+      context: { details },
+    });
+    sendApiError(
+      res,
+      500,
+      { code: "order_creation_failed", message: "Order creation failed", details },
+      "order_creation_failed",
+      "Order creation failed"
+    );
   }
 });
 
@@ -1274,7 +1421,7 @@ app.get("/generate-print-code", authenticateToken, async (req, res) => {
       .get();
 
     if (snapshot.empty) {
-      return res.status(400).json({ error: "No paid jobs found" });
+      return sendApiError(res, 400, null, "no_paid_jobs", "No paid jobs found");
     }
 
     const data = snapshot.docs[0].data();
@@ -1287,7 +1434,7 @@ app.get("/generate-print-code", authenticateToken, async (req, res) => {
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to fetch print code" });
+    res.status(500).json({ ok: false, error: { code: "print_code_fetch_failed", message: "Failed to fetch print code", details: err.message || null } });
   }
 });
 // ================= PRINT BY CODE =================
@@ -1298,7 +1445,7 @@ app.post("/get-documents-by-code", async (req, res) => {
     const lookupPin = pin || printCode;
 
     if (!lookupPin) {
-      return res.status(400).json({ error: "Print code required" });
+      return sendApiError(res, 400, null, "print_code_required", "Print code required");
     }
 
     const snapshot = await db
@@ -1308,7 +1455,7 @@ app.post("/get-documents-by-code", async (req, res) => {
       .get();
 
     if (snapshot.empty) {
-      return res.status(404).json({ error: "Invalid code" });
+      return sendApiError(res, 404, null, "invalid_code", "Invalid code");
     }
 
     const validDocs = [];
@@ -1388,7 +1535,7 @@ app.post("/get-documents-by-code", async (req, res) => {
 
   } catch (err) {
     console.error("❌ SERVER ERROR:", err);
-    res.status(500).json({ error: "Failed to fetch documents" });
+    res.status(500).json({ ok: false, error: { code: "documents_fetch_failed", message: "Failed to fetch documents", details: err.message || null } });
   }
 });
 
@@ -1418,7 +1565,7 @@ app.get("/print-history", authenticateToken, async (req, res) => {
     id: doc.id,
     file: data.fileName,
     details: `${data.pageCount} pages`,
-    cost: `₹${(data.pageCount * 2.3).toFixed(2)}`,
+    cost: `₹${(data.pageCount * PRICE_PER_PAGE).toFixed(2)}`,
     status: data.status,
     printerStatus,                 // ✅ ADD THIS
     printCode: data.printCode || "-",
@@ -1452,7 +1599,7 @@ app.get("/print-summary", authenticateToken, async (req, res) => {
     snapshot.forEach((doc) => {
       const data = doc.data();
       totalPages += data.pageCount || 0;
-      totalAmount += (data.pageCount || 0) * 2.3;
+      totalAmount += (data.pageCount || 0) * PRICE_PER_PAGE;
     });
 
     res.json({
@@ -1473,7 +1620,7 @@ app.post("/mark-printed", authenticateToken, async (req, res) => {
     const lookupPin = pin || printCode;
 
     if (!lookupPin) {
-      return res.status(400).json({ error: "Print code required" });
+      return sendApiError(res, 400, null, "print_code_required", "Print code required");
     }
 
     const snapshot = await db
@@ -1482,7 +1629,7 @@ app.post("/mark-printed", authenticateToken, async (req, res) => {
       .get();
 
     if (snapshot.empty) {
-      return res.status(404).json({ error: "No jobs found" });
+      return sendApiError(res, 404, null, "jobs_not_found", "No jobs found");
     }
 
     const batch = db.batch();
@@ -1501,7 +1648,7 @@ app.post("/mark-printed", authenticateToken, async (req, res) => {
 
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to update print status" });
+    res.status(500).json({ ok: false, error: { code: "mark_printed_failed", message: "Failed to update print status", details: err.message || null } });
   }
 });
 
@@ -1538,11 +1685,11 @@ app.post("/kiosk/print", kioskPrintLimiter, async (req, res) => {
     const { pin } = req.body;
 
     if (!pin || String(pin).length !== 4) {
-      return res.status(400).json({ error: "A valid 4-digit PIN is required" });
+      return sendApiError(res, 400, null, "invalid_pin", "A valid 4-digit PIN is required");
     }
 
     if (!TEST_PRINT_MODE && !FASTAPI_PRINT_URL) {
-      return res.status(500).json({ error: "FASTAPI_PRINT_URL is not configured" });
+      return sendApiError(res, 500, null, "printer_not_configured", "FASTAPI_PRINT_URL is not configured");
     }
 
     const snapshot = await db
@@ -1552,18 +1699,18 @@ app.post("/kiosk/print", kioskPrintLimiter, async (req, res) => {
       .get();
 
     if (snapshot.empty) {
-      return res.status(404).json({ error: "Print job not found" });
+      return sendApiError(res, 404, null, "print_job_not_found", "Print job not found");
     }
 
     const doc = snapshot.docs[0];
     const jobData = doc.data();
 
     if (!jobData.fileUrl) {
-      return res.status(400).json({ error: "Print job has no file URL" });
+      return sendApiError(res, 400, null, "missing_file_url", "Print job has no file URL");
     }
 
     if (jobData.status !== "paid" && jobData.status !== "printing") {
-      return res.status(400).json({ error: "Print job is not ready" });
+      return sendApiError(res, 400, null, "print_job_not_ready", "Print job is not ready");
     }
 
     await doc.ref.update({
@@ -1654,7 +1801,13 @@ app.post("/kiosk/print", kioskPrintLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to trigger print" });
+    await emitOpsAlert({
+      code: "kiosk_print_failed",
+      severity: "high",
+      message: "Failed to trigger print",
+      context: { details: err.message || String(err) },
+    });
+    res.status(500).json({ ok: false, error: { code: "kiosk_print_failed", message: "Failed to trigger print", details: err.message || null } });
   }
 });
 
