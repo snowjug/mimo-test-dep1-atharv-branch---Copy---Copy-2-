@@ -1,4 +1,9 @@
-require("dotenv").config();
+const dotenv = require("dotenv");
+const path = require("node:path");
+
+// Load env from api/.env regardless of process working directory.
+dotenv.config({ path: path.join(__dirname, ".env") });
+dotenv.config();
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcrypt");
@@ -8,7 +13,6 @@ const { PDFDocument } = require("pdf-lib");
 const { v4: uuidv4 } = require("uuid");
 const axios = require("axios");
 const fs = require("node:fs");
-const path = require("node:path");
 const os = require("node:os");
 const { promisify } = require("node:util");
 const { OAuth2Client } = require("google-auth-library");
@@ -217,10 +221,21 @@ app.get("/health", (_req, res) => {
 
 // ================= CASHFREE =================
 const CASHFREE_BASE_URL = "https://sandbox.cashfree.com/pg";
+
+const cashfreeClientId =
+  process.env.CASHFREE_APP_ID ||
+  process.env.CASHFREE_API_KEY ||
+  process.env.CASHFREE_CLIENT_ID;
+
+const cashfreeClientSecret =
+  process.env.CASHFREE_SECRET_KEY ||
+  process.env.CASHFREE_API_SECRET ||
+  process.env.CASHFREE_CLIENT_SECRET;
+
 const cashfreeHeaders = {
   "Content-Type": "application/json",
-  "x-client-id": process.env.CASHFREE_APP_ID,
-  "x-client-secret": process.env.CASHFREE_SECRET_KEY,
+  "x-client-id": cashfreeClientId,
+  "x-client-secret": cashfreeClientSecret,
   "x-api-version": "2025-01-01",
 };
 
@@ -782,8 +797,9 @@ app.post("/create-order", authenticateToken, async (req, res) => {
       amount,
     });
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).send("Order creation failed");
+    const details = err.response?.data || err.message;
+    console.error(details);
+    res.status(500).json({ error: "Order creation failed", details });
   }
 });
 

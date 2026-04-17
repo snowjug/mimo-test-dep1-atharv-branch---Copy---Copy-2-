@@ -24,11 +24,27 @@ const loadServiceAccount = () => {
   );
 };
 
-const rawStorageBucket = process.env.FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_BUCKET || "startup-bca3e.firebasestorage.app";
+const serviceAccount = loadServiceAccount();
+
+const deriveDefaultBucket = () => {
+  const projectId = serviceAccount?.project_id;
+  if (!projectId) {
+    return "";
+  }
+
+  // Firebase Storage default bucket format for this project.
+  return `${projectId}.firebasestorage.app`;
+};
+
+const rawStorageBucket =
+  process.env.FIREBASE_STORAGE_BUCKET ||
+  process.env.FIREBASE_BUCKET ||
+  deriveDefaultBucket();
+
 const storageBucket = rawStorageBucket.replace(/^gs:\/\//, "").replace(/^https?:\/\//, "");
 
 admin.initializeApp({
-  credential: admin.credential.cert(loadServiceAccount()),
+  credential: admin.credential.cert(serviceAccount),
   storageBucket,
 });
 
