@@ -50,8 +50,9 @@ export function PrintOptions() {
     });
   }, [navigate]);
 
-  // ✅ REAL DATA FROM BACKEND
-  const totalPages = backendSummary?.totalPages || 0;
+  // Always derive from uploaded file metadata first to keep list + totals in sync.
+  const derivedTotalPages = files.reduce((sum, file) => sum + Number(file.pageCount || 0), 0);
+  const totalPages = derivedTotalPages || backendSummary?.totalPages || 0;
 
   const actualPages =
     doubleSided === "double"
@@ -59,7 +60,7 @@ export function PrintOptions() {
       : totalPages;
 
   // ✅ BACKEND PRICING FIX
-  const backendAmount = backendSummary?.amount || 0;
+  const backendAmount = backendSummary?.amount || Number((totalPages * 2.3).toFixed(2));
 
   const adjustedAmount =
     doubleSided === "double"
