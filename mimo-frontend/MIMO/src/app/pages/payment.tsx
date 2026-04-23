@@ -13,8 +13,7 @@ import { MimoCoinsDisplay } from "../components/mimo-coins-display";
 import { MimoHeader } from "../components/mimo-header";
 import { load } from "@cashfreepayments/cashfree-js";
 import { toast } from "sonner";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 const token = localStorage.getItem("token");
 
 export function Payment() {
@@ -96,7 +95,7 @@ export function Payment() {
     }
 
     // 🔹 1. Create order
-    const res = await fetch(`${API_BASE_URL}/create-order`, {
+    const res = await apiFetch("/create-order", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -135,9 +134,7 @@ export function Payment() {
     let isPaid = false;
 
     for (let i = 0; i < 6; i++) {
-      const verifyRes = await fetch(
-        `${API_BASE_URL}/verify-payment/${data.orderId}`
-      );
+      const verifyRes = await apiFetch(`/verify-payment/${data.orderId}`);
 
       const verifyText = await verifyRes.text();
 
@@ -162,7 +159,7 @@ export function Payment() {
     }
 
     // 🔥 4. VERY IMPORTANT → UPDATE PRINT JOB STATUS
-    const updateRes = await fetch(`${API_BASE_URL}/payment-success`, {
+    const updateRes = await apiFetch("/payment-success", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,

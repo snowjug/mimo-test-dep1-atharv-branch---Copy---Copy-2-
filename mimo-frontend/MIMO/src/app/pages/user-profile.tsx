@@ -14,8 +14,7 @@ import { Separator } from "../components/ui/separator";
 import { MimoHeader } from "../components/mimo-header";
 import { User, Mail, Phone, Save, Bell, FileText, Gift } from "lucide-react";
 import { toast } from "sonner";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 
 
 export function UserProfile() {
@@ -39,7 +38,7 @@ export function UserProfile() {
         return;
       }
 
-      const res = await fetch(`${API_BASE_URL}/print-history`, {
+      const res = await apiFetch("/print-history", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -68,7 +67,7 @@ export function UserProfile() {
     try {
       const token = localStorage.getItem("token");
 
-      const res = await fetch(`${API_BASE_URL}/profile`, {
+      const res = await apiFetch("/profile", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -92,7 +91,7 @@ export function UserProfile() {
   try {
     const token = localStorage.getItem("token");
 
-    const res = await fetch(`${API_BASE_URL}/profile`, {
+    const res = await apiFetch("/profile", {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",

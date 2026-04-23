@@ -7,8 +7,7 @@ import { Avatar, AvatarFallback } from "../components/ui/avatar";
 import { MimoCoinsDisplay } from "../components/mimo-coins-display";
 import { Upload, FileText, X, Printer, CheckCircle, AlertCircle, History, Layers, Wallet, Eye } from "lucide-react";
 import { toast } from "sonner";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { API_BASE_URL } from "../lib/api";
 
 const ALLOWED_EXTENSIONS = ["pdf", "doc", "docx", "txt", "jpg", "jpeg", "png"];
 

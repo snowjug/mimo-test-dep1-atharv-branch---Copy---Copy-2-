@@ -15,8 +15,7 @@ import { User, Bell, CreditCard, Shield, Save, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { ThemeToggle } from "../components/ui/theme-toggle";
 import { MimoHeader } from "../components/mimo-header";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 
 export function PrinterSettings() {
   const [emailNotifications, setEmailNotifications] = useState(true);
@@ -33,7 +32,7 @@ export function PrinterSettings() {
     try {
       const token = localStorage.getItem("token");
 
-      const res = await fetch(`${API_BASE_URL}/settings`, {
+      const res = await apiFetch("/settings", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -69,7 +68,7 @@ export function PrinterSettings() {
       autoDelete,
     };
 
-    const res = await fetch(`${API_BASE_URL}/settings`, {
+    const res = await apiFetch("/settings", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react";
 import { Gift } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 
 export function MimoCoinsDisplay() {
   const navigate = useNavigate();
@@ -14,7 +13,7 @@ export function MimoCoinsDisplay() {
         const token = localStorage.getItem("token");
         if (!token) return;
 
-        const res = await fetch(`${API_BASE_URL}/mimo/coins`, {
+        const res = await apiFetch("/mimo/coins", {
           headers: {
             Authorization: `Bearer ${token}`
           }

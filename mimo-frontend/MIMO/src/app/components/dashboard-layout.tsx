@@ -9,8 +9,7 @@ import {
   Menu,
 } from "lucide-react";
 import { Button } from "./ui/button";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 
 export function DashboardLayout() {
 
@@ -36,7 +35,7 @@ export function DashboardLayout() {
       try {
         const token = localStorage.getItem("token");
 
-        const res = await fetch(`${API_BASE_URL}/print-summary`, {
+        const res = await apiFetch("/print-summary", {
           headers: {
             Authorization: `Bearer ${token}`,
           },

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 
 export function PrintHistory() {
   const [history, setHistory] = useState<any[]>([]);
@@ -18,7 +17,7 @@ export function PrintHistory() {
       try {
         const token = localStorage.getItem("token");
 
-        const res = await fetch(`${API_BASE_URL}/print-history`, {
+        const res = await apiFetch("/print-history", {
           headers: {
             Authorization: `Bearer ${token}`,
           },

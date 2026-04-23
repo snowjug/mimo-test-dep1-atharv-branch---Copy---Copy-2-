@@ -33,6 +33,7 @@ const FASTAPI_PRINT_URL = process.env.FASTAPI_PRINT_URL || process.env.NEXT_PUBL
 const TEST_PRINT_MODE = String(process.env.TEST_PRINT_MODE || "").toLowerCase() === "true";
 const OPS_ALERT_WEBHOOK_URL = process.env.OPS_ALERT_WEBHOOK_URL || "";
 const OPS_DASHBOARD_KEY = process.env.OPS_DASHBOARD_KEY || "";
+const PDF_CACHE_MAX_MB = Number(process.env.PDF_CACHE_MAX_MB || 96);
 
 const SUPPORTED_EXTENSIONS = new Set([
   ".pdf",
@@ -236,7 +237,7 @@ const downloadJobPdf = async (jobData) => {
 
 const pdfCache = new Map();
 const PDF_CACHE_TTL = 15 * 60 * 1000;
-const MAX_CACHE_SIZE = 200 * 1024 * 1024;  // 200MB max
+const MAX_CACHE_SIZE = Math.max(16, PDF_CACHE_MAX_MB) * 1024 * 1024;
 let cacheSizeBytes = 0;
 
 setInterval(() => {
@@ -379,9 +380,36 @@ const convertFileToPdf = async (file) => {
 
 // ================= APP =================
 const app = express();
+
+const configuredOrigins = (process.env.CORS_ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const allowedOrigins = new Set([
+  "http://localhost:5173",
+  "http://localhost:4173",
+  ...configuredOrigins,
+]);
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.has(origin)) return true;
+
+  // Allow Vercel preview/production domains without listing each deployment URL.
+  return /^https:\/\/[a-zA-Z0-9-]+\.vercel\.app$/.test(origin);
+};
+
 app.use(express.json({ limit: "100mb" }));
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) {
+      return callback(null, true);
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+}));
 const upload = multer({ storage: multer.memoryStorage() });
 const SECRET_KEY = process.env.JWT_SECRET;
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -392,6 +420,22 @@ app.get("/", (_req, res) => {
 
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok" });
+});
+
+app.get("/ready", async (_req, res) => {
+  try {
+    await withTimeout(
+      db.collection(COLLECTIONS.USERS).limit(1).get(),
+      3000,
+      "Firestore readiness check"
+    );
+    return res.status(200).json({ status: "ready" });
+  } catch (err) {
+    return res.status(503).json({
+      status: "not_ready",
+      message: err.message,
+    });
+  }
 });
 
 app.get("/ops/checks", async (req, res) => {
@@ -1872,10 +1916,33 @@ app.get("/download/:id", async (req, res) => {
   }
 });
 // ================= START =================
+let server;
+
+const gracefulShutdown = (signal) => {
+  console.log(`Received ${signal}. Starting graceful shutdown...`);
+
+  if (!server) {
+    process.exit(0);
+  }
+
+  server.close(() => {
+    console.log("HTTP server closed.");
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error("Forced shutdown after timeout.");
+    process.exit(1);
+  }, 10000).unref();
+};
+
 if (require.main === module) {
-  app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
+  server = app.listen(process.env.PORT || 3000, "0.0.0.0", () => {
     console.log("🚀 Server running");
   });
+
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 }
 
 module.exports = app;

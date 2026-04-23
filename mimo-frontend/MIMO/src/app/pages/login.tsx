@@ -24,8 +24,7 @@ import {
 } from "lucide-react";
 
 import { toast } from "sonner";
-
-const API_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 
 export function Login() {
   const navigate = useNavigate();
@@ -47,7 +46,7 @@ export function Login() {
     }
 
     try {
-      const userRes = await fetch(`${API_URL}/mimo/user`, {
+      const userRes = await apiFetch("/mimo/user", {
         headers: { Authorization: `Bearer ${jwtToken}` },
       });
 
@@ -75,7 +74,7 @@ export function Login() {
 
     try {
       if (isSignup) {
-        const registerRes = await fetch(`${API_URL}/register`, {
+        const registerRes = await apiFetch("/register", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -98,7 +97,7 @@ export function Login() {
         setIsSignup(false);
         setPassword("");
       } else {
-        const res = await fetch(`${API_URL}/login`, {
+        const res = await apiFetch("/login", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -123,7 +122,7 @@ export function Login() {
   // ================= GOOGLE LOGIN =================
   const handleGoogleSuccess = async (credentialResponse: any) => {
     try {
-      const res = await fetch(`${API_URL}/google-login`, {
+      const res = await apiFetch("/google-login", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

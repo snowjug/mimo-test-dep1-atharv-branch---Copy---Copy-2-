@@ -2,8 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Avatar, AvatarFallback } from "./ui/avatar";
 import { MimoCoinsDisplay } from "./mimo-coins-display";
-
-const API_BASE_URL = import.meta.env.VITE_BACKEND_API_URL || "http://localhost:3000";
+import { apiFetch } from "../lib/api";
 
 export function MimoHeader() {
   const navigate = useNavigate();
@@ -15,7 +14,7 @@ export function MimoHeader() {
         const token = localStorage.getItem("token");
         if (!token) return;
 
-        const res = await fetch(`${API_BASE_URL}/mimo/user`, {
+        const res = await apiFetch("/mimo/user", {
           headers: {
             Authorization: `Bearer ${token}`
           }
