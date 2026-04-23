@@ -132,14 +132,21 @@ export function Login() {
         }),
       });
 
-      const data = await res.json();
+      const responseText = await res.text();
+      if (!res.ok) {
+        throw new Error(responseText || `Google login failed (${res.status})`);
+      }
 
-      if (!res.ok) throw new Error("Google login failed");
+      const data = JSON.parse(responseText);
 
       toast.success("Google login successful!");
       await routeAfterAuth(data.jwtToken, data.name);
-    } catch {
-      toast.error("Google login failed");
+    } catch (error: any) {
+      console.error("Google login failed:", error);
+      toast.error(
+        error?.message ||
+          "Google login failed. Check VITE_BACKEND_API_URL, backend reachability, and CORS origins."
+      );
     }
   };
 
@@ -274,7 +281,7 @@ export function Login() {
                 <div className="flex justify-center">
                   <GoogleLogin
                     onSuccess={handleGoogleSuccess}
-                    onError={() => toast.error("Google login failed")}
+                    onError={() => toast.error("Google sign-in popup failed. Check Google OAuth origins and client ID.")}
                   />
                 </div>
               </>

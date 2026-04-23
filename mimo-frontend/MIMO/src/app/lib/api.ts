@@ -39,6 +39,9 @@ export const apiFetch = async (
         signal: controller.signal,
       });
     } catch (error) {
+      if (error instanceof Error) {
+        error.message = `${error.message} (request: ${apiUrl(path)})`;
+      }
       if (attempt >= retry) {
         throw error;
       }
