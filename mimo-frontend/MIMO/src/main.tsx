@@ -7,8 +7,11 @@ import { ThemeProvider } from "./app/components/theme-provider.tsx";
 // ✅ IMPORT GOOGLE PROVIDER
 import { GoogleOAuthProvider } from "@react-oauth/google";
 
-// 🔥 Replace with your real client ID
-const GOOGLE_CLIENT_ID = "171540706123-0kbe2tufoa1nqs9hkb1dp2o1i0k8795d.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
+
+if (!GOOGLE_CLIENT_ID) {
+  throw new Error("Missing VITE_GOOGLE_CLIENT_ID. Set it in your frontend environment variables.");
+}
 
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

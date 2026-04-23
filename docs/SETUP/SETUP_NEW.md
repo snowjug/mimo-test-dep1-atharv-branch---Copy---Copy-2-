@@ -384,6 +384,7 @@ If any step fails:
 - Backend health: `https://site--disturbed-shelter--jdhq2tzrjfvg.code.run/health`
 - Backend API base for frontends: `https://site--disturbed-shelter--jdhq2tzrjfvg.code.run`
 - Shared frontend env var: `VITE_BACKEND_API_URL`
+- Google OAuth frontend env var: `VITE_GOOGLE_CLIENT_ID`
 - Firebase secret env var: `FIREBASE_SERVICE_ACCOUNT_JSON_BASE64`
 - Test printing switch: `TEST_PRINT_MODE`
 
